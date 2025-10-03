@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  trivy-sca:
+  static-analysis:
     runs-on: ubuntu-latest
     name: Analyse SCA avec Trivy
 
