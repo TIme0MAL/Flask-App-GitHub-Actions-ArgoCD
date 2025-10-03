@@ -1,0 +1,112 @@
+name: Deploy Monitoring Stack
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Récupérer le code du dépôt
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Configurer SSH pour EC2
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.1
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+
+      # 3️⃣ Installer AWS CLI sur GitHub Runner
+      - name: Install AWS CLI
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+          aws --version
+
+          # Configurer AWS CLI
+          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+          aws configure set region $AWS_DEFAULT_REGION
+          
+          # Vérifier l'accès
+          aws sts get-caller-identity
+
+      # 4️⃣ Installer kubectl
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          kubectl version --client
+
+      # 5️⃣ Installer Helm
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      # 6️⃣ Se connecter à EC2 et déployer la stack monitoring
+      - name: Connect to EC2 and Deploy
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_PUBLIC_IP }} << 'EOF'
+            echo "🚀 Déploiement sur EC2"
+
+            # Mettre à jour le système
+            sudo yum update -y
+
+            # Installer kubectl sur EC2 si pas présent
+            if ! command -v kubectl &> /dev/null
+            then
+              curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+              chmod +x kubectl
+              sudo mv kubectl /usr/local/bin/
+            fi
+
+            # Installer Helm si pas présent
+            if ! command -v helm &> /dev/null
+            then
+              curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+            fi
+
+            # Configurer AWS CLI sur EC2
+            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+            aws configure set region $AWS_DEFAULT_REGION
+
+            # Créer namespace monitoring
+            kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+            # Ajouter les repos Helm
+            helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+            helm repo add grafana https://grafana.github.io/helm-charts
+            helm repo update
+
+            # Déployer Prometheus
+            helm upgrade --install prometheus prometheus-community/kube-prometheus-stack -n monitoring
+
+            # Déployer Grafana
+            helm upgrade --install grafana grafana/grafana -n monitoring
+
+            # Vérifier les pods
+            kubectl get pods -n monitoring
+
+            # 🔹 Port-forward pour Grafana (3000) et Prometheus (9090)
+            nohup kubectl port-forward svc/grafana 3000:80 -n monitoring > grafana.log 2>&1 &
+            nohup kubectl port-forward svc/prometheus-operated 9090:9090 -n monitoring > prometheus.log 2>&1 &
+
+            echo "✅ Port-forwarding en arrière-plan terminé"
+          EOF
