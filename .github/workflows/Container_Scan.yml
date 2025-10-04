@@ -1,4 +1,6 @@
 name: Container Scan avec Trivy
+permissions:
+  contents: read
 on:
   workflow_dispatch:
 
