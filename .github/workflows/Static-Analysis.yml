@@ -1,4 +1,6 @@
 name: Trivy-Static-Analysis
+permissions:
+  contents: read
 
 on:
   workflow_dispatch:
